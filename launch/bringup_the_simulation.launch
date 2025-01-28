@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+
+	<!-- Specify the drone model and world -->
+    <arg name="vehicle" default="iris" />
+    <arg name="world" default="$(find px4)/tools/sitl_gazebo/worlds/empty.world" />
+
+	<!-- Include the MAVROS node with SITL and Gazebo -->
+	<include file="$(find px4)/launch/mavros_posix_sitl.launch">
+		<arg name="vehicle" value="$(arg vehicle)" />
+        <arg name="world" value="$(arg world)" />
+	</include>
+
+</launch>
