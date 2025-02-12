@@ -153,20 +153,6 @@ class DroneController:
         rospy.logerr("Takeoff interrupted or failed")
         return False
 
-    def set_mode(self, mode):
-        """Set flight mode."""
-        try:
-            response = self.set_mode_service(custom_mode=mode)
-            if response.mode_sent:
-                rospy.loginfo(f"Flight mode set to {mode}")
-                return True
-            else:
-                rospy.logerr(f"Failed to set flight mode to {mode}")
-                return False
-        except rospy.ServiceException as e:
-            rospy.logerr(f"Service call failed: {e}")
-            return False
-
     def land_drone(self, req):
         """Service callback to land the drone."""
         rospy.loginfo("Landing initiated...")
