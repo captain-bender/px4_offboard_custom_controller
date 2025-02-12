@@ -5,6 +5,7 @@ from geometry_msgs.msg import TwistStamped, PoseStamped
 from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, SetMode
 from nav_msgs.msg import Odometry
+from std_srvs.srv import Trigger, TriggerResponse
 
 class DroneController:
     def __init__(self):
@@ -24,6 +25,9 @@ class DroneController:
         rospy.wait_for_service("/mavros/set_mode")
         self.arm_service = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
         self.set_mode_service = rospy.ServiceProxy("/mavros/set_mode", SetMode)
+
+        # Landing Service
+        self.landing_service = rospy.Service("land_drone", Trigger, self.land_drone)
 
         # Variables
         self.current_state = State()
@@ -116,7 +120,7 @@ class DroneController:
         
         rospy.logerr("Failed to arm or switch to OFFBOARD mode")
         return False
-
+    
     def takeoff(self):
         """Take off to a specified altitude."""
         pose = PoseStamped()
@@ -148,7 +152,43 @@ class DroneController:
         
         rospy.logerr("Takeoff interrupted or failed")
         return False
+
+    def set_mode(self, mode):
+        """Set flight mode."""
+        try:
+            response = self.set_mode_service(custom_mode=mode)
+            if response.mode_sent:
+                rospy.loginfo(f"Flight mode set to {mode}")
+                return True
+            else:
+                rospy.logerr(f"Failed to set flight mode to {mode}")
+                return False
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Service call failed: {e}")
+            return False
+
+    def land_drone(self, req):
+        """Service callback to land the drone."""
+        rospy.loginfo("Landing initiated...")
+
+        try:
+            response = self.set_mode_service(custom_mode="AUTO.LAND")
+            if response.mode_sent:
+                rospy.loginfo(f"Flight mode set to AUTO.LAND")
+            else:
+                return TriggerResponse(success=False, message="Failed to set AUTO.LAND mode")
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Service call failed: {e}")
         
+        # Wait for landing
+        while not rospy.is_shutdown():
+            if self.current_pose and self.current_pose.position.z <= 0.1:  # Check if landed
+                rospy.loginfo("Drone has landed.")
+                break
+            self.rate.sleep()
+
+        return TriggerResponse(success=True, message="Drone landed and disarmed successfully")
+           
     def run(self):
         """Main control loop."""
         
@@ -173,15 +213,7 @@ class DroneController:
 
             if self.control_mode == "position" and self.current_pose:
                 # Publish current position as setpoint for hovering
-                # pose_msg = PoseStamped()
-                # pose_msg.header.stamp = now
-                # pose_msg.pose.position.x = self.current_pose.position.x
-                # pose_msg.pose.position.y = self.current_pose.position.y
-                # pose_msg.pose.position.z = max(self.current_pose.position.z, 1.0)  # Maintain altitude
-                # pose_msg.pose.orientation = self.current_pose.orientation
-                # self.pos_pub.publish(pose_msg)
                 self.pos_pub.publish(self.locked_position)
-
 
             self.rate.sleep()
 

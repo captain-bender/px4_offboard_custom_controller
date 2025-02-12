@@ -6,7 +6,7 @@ import threading
 
 import roslib; roslib.load_manifest('teleop_twist_keyboard')
 import rospy
-
+from std_srvs.srv import Trigger
 from geometry_msgs.msg import TwistStamped
 
 import sys
@@ -126,8 +126,6 @@ class PublishThread(threading.Thread):
 
     def run(self):
         twist_msg = TwistStamped()
-
-
         twist = twist_msg.twist
         twist_msg.header.stamp = rospy.Time.now()
         twist_msg.header.frame_id = twist_frame
@@ -194,6 +192,8 @@ if __name__=="__main__":
 
     rospy.init_node('teleop_twist_keyboard')
 
+    land_service = rospy.ServiceProxy('land_drone', Trigger)
+
     speed = rospy.get_param("~speed", 0.5)
     turn = rospy.get_param("~turn", 1.0)
     speed_limit = rospy.get_param("~speed_limit", 1000)
@@ -234,6 +234,15 @@ if __name__=="__main__":
                 if (status == 14):
                     print(msg)
                 status = (status + 1) % 15
+            elif key == 'r':
+                try:
+                    response = land_service()
+                    if response.success:
+                        print("Landing successful:", response.message)
+                    else:
+                        print("Landing failed:", response.message)
+                except rospy.ServiceException as e:
+                    print(f"Service call failed: {e}")
             else:
                 # Skip updating cmd_vel if key timeout and robot already
                 # stopped.
