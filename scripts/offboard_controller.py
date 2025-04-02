@@ -45,12 +45,15 @@ class DroneController:
         self.rate = rospy.Rate(20)
 
     def state_cb(self, msg):
+        """State callback: store current flight state (mode, arming status, etc.)."""
         self.current_state = msg
 
     def odom_cb(self, msg):
+        """Odometry callback: update current_pose with the latest position."""
         self.current_pose = msg.pose.pose
 
     def vel_cb(self, msg):
+        """Velocity setpoint callback: invoked when a new velocity command is received."""
         # Update last velocity command time
         self.last_velocity_time = rospy.Time.now()
         if self.control_mode != "velocity":
@@ -75,6 +78,7 @@ class DroneController:
             rospy.loginfo("Waiting for FCU connection...")
             self.rate.sleep()
 
+        # Prepare an initial position setpoint (hover at takeoff altitude)
         pose = PoseStamped()
         pose.pose.position.x = 0
         pose.pose.position.y = 0
@@ -137,13 +141,32 @@ class DroneController:
                 self.rate.sleep()
                 continue
 
-            current_altitude = self.current_pose.position.z
-            rospy.loginfo_throttle(1, f"Current Altitude: {current_altitude:.2f} m")
+            current_alt = self.current_pose.position.z
+            rospy.loginfo_throttle(1, f"Current Altitude: {current_alt:.2f} m")
 
-            if current_altitude >= self.takeoff_altitude * 0.95:  # Allow a small tolerance
+            # Once we reach ~95% of target altitude, consider takeoff complete
+            if current_alt >= self.takeoff_altitude * 0.95:
                 rospy.loginfo("Target altitude reached!")
-                self.lock_position()
+                # Engage LOITER mode to hold position
+                self.lock_position()  # record current position
+                try:
+                    response = self.set_mode_service(custom_mode="AUTO.LOITER")
+                    if response.mode_sent:
+                        rospy.loginfo("Switched to LOITER mode for hover")
+                        self.control_mode = "loiter"
+                    else:
+                        rospy.logwarn("Failed to switch to LOITER, staying in Offboard hold")
+                        self.control_mode = "position"
+                except rospy.ServiceException as e:
+                    rospy.logerr(f"Error switching to LOITER: {e}")
+                    rospy.logwarn("Continuing hover in OFFBOARD mode")
+                    self.control_mode = "position"
                 return True
+
+            # if current_altitude >= self.takeoff_altitude * 0.95:  # Allow a small tolerance
+            #     rospy.loginfo("Target altitude reached!")
+            #     self.lock_position()
+            #     return True
 
 
             # Publish setpoint for takeoff
@@ -176,7 +199,7 @@ class DroneController:
         return TriggerResponse(success=True, message="Drone landed and disarmed successfully")
            
     def run(self):
-        """Main control loop."""
+        """Main control loop: manages LOITER and Offboard transitions."""
         
         # Arm and set OFFBOARD mode before takeoff
         if not self.arm_and_offboard():
@@ -185,21 +208,58 @@ class DroneController:
         # Perform takeoff
         if not self.takeoff():
             return
-
+        
+        # After takeoff, the drone will be in LOITER (hold) or Offboard (if LOITER failed)
         while not rospy.is_shutdown():
             now = rospy.Time.now()
 
             if self.control_mode == "velocity":
-                # Check for timeout to switch back to position control
+                # If no velocity commands for a while, switch back to LOITER hold
                 if now - self.last_velocity_time > self.timeout:
-                    rospy.loginfo("Switching to position control")
-                    self.control_mode = "position"
-                    # Lock the current position as the setpoint
-                    self.lock_position()
+                    rospy.loginfo("No recent velocity commands; switching to LOITER mode.")
+                    self.lock_position()  # lock position for safety
+                    try:
+                        response = self.set_mode_service(custom_mode="AUTO.LOITER")
+                        if response.mode_sent:
+                            rospy.loginfo("Flight mode set to LOITER (holding position)")
+                            self.control_mode = "loiter"
+                        else:
+                            rospy.logwarn("LOITER switch failed, reverting to position hold")
+                            self.control_mode = "position"
+                    except rospy.ServiceException as e:
+                        rospy.logerr(f"Failed to switch to LOITER: {e}")
+                        self.control_mode = "position"
 
-            if self.control_mode == "position" and self.current_pose:
-                # Publish current position as setpoint for hovering
+            # Ensure OFFBOARD mode is active when velocity control is requested
+            if self.control_mode == "velocity" and self.current_state.mode != "OFFBOARD":
+                try:
+                    if self.set_mode_service(custom_mode="OFFBOARD").mode_sent:
+                        rospy.loginfo("OFFBOARD mode re-engaged for velocity control")
+                    else:
+                        rospy.logerr("Could not switch to OFFBOARD mode for velocity commands")
+                except rospy.ServiceException as e:
+                    rospy.logerr(f"Error re-engaging OFFBOARD: {e}")
+
+            # If in manual position hold (fallback), continue publishing the locked position
+            if self.control_mode == "position" and self.current_pose and self.locked_position:
                 self.pos_pub.publish(self.locked_position)
+
+            self.rate.sleep()
+
+        # while not rospy.is_shutdown():
+        #     now = rospy.Time.now()
+
+        #     if self.control_mode == "velocity":
+        #         # Check for timeout to switch back to position control
+        #         if now - self.last_velocity_time > self.timeout:
+        #             rospy.loginfo("Switching to position control")
+        #             self.control_mode = "position"
+        #             # Lock the current position as the setpoint
+        #             self.lock_position()
+
+        #     if self.control_mode == "position" and self.current_pose:
+        #         # Publish current position as setpoint for hovering
+        #         self.pos_pub.publish(self.locked_position)
 
             self.rate.sleep()
 
